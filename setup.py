@@ -56,6 +56,15 @@ setup(
             "matplotlib>=3.7.0",
             "seaborn>=0.12.0",
         ],
+        "explain": [
+            "shap>=0.42.0",
+        ],
+        "tracking": [
+            "mlflow>=2.7.0",
+        ],
+        "tuning": [
+            "optuna>=3.3.0",
+        ],
         "dev": [
             "pytest>=7.4.0",
             "pytest-cov>=4.1.0",
@@ -72,6 +81,10 @@ setup(
             "skl2onnx>=1.15.0",
             "matplotlib>=3.7.0",
             "seaborn>=0.12.0",
+            "shap>=0.42.0",
+            "mlflow>=2.7.0",
+            "optuna>=3.3.0",
+            "pyyaml>=6.0.0",
             "pytest>=7.4.0",
             "pytest-cov>=4.1.0",
             "black>=23.7.0",
