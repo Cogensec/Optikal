@@ -13,10 +13,24 @@ Model Architecture:
 Created for NVIDIA Morpheus integration with the ARGUS platform.
 """
 
+import json
 import logging
 
 __version__ = "1.0.0"
 __author__  = "Cogensec"
+
+
+class _JsonFormatter(logging.Formatter):
+    """Formatter that outputs properly escaped JSON log records."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_obj = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "module": record.name,
+            "message": record.getMessage(),
+        }
+        return json.dumps(log_obj)
 
 
 def configure_logging(level: int = logging.INFO, fmt: str = "plain") -> None:
@@ -34,11 +48,7 @@ def configure_logging(level: int = logging.INFO, fmt: str = "plain") -> None:
                            ``{"timestamp": "...", "level": "INFO", "module": "...", "message": "..."}``
     """
     if fmt == "json":
-        formatter = logging.Formatter(
-            '{"timestamp":"%(asctime)s","level":"%(levelname)s",'
-            '"module":"%(name)s","message":"%(message)s"}',
-            datefmt="%Y-%m-%dT%H:%M:%S",
-        )
+        formatter = _JsonFormatter()
     else:
         formatter = logging.Formatter(
             "[%(asctime)s] %(levelname)s [%(name)s] %(message)s",
@@ -50,7 +60,8 @@ def configure_logging(level: int = logging.INFO, fmt: str = "plain") -> None:
 
     pkg_logger = logging.getLogger("optikal")
     pkg_logger.setLevel(level)
-    # Avoid adding duplicate handlers on repeated calls
-    if not pkg_logger.handlers:
-        pkg_logger.addHandler(handler)
+    # Remove existing handlers to allow reconfiguration
+    for existing_handler in pkg_logger.handlers[:]:
+        pkg_logger.removeHandler(existing_handler)
+    pkg_logger.addHandler(handler)
     pkg_logger.propagate = False
