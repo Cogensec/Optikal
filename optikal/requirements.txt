@@ -31,5 +31,11 @@ tqdm>=4.65.0
 # Hyperparameter optimisation (optional — install with: pip install optikal[tuning])
 # optuna>=3.3.0
 
+# Gradient Boosting (optional — install with: pip install optikal[gbm])
+# lightgbm>=4.0.0
+
+# Kafka stream integration (optional — install with: pip install optikal[streaming])
+# confluent-kafka>=2.2.0
+
 # Configuration YAML support (optional)
 # pyyaml>=6.0.0

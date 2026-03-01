@@ -1,0 +1,115 @@
+version: "3.8"
+
+# =============================================================================
+# Optikal — Development / Demo Stack
+#
+# Services:
+#   trainer      — runs train_quick.py and writes model files to ./optikal_models
+#   inference    — Kafka consumer (starts after trainer finishes)
+#   mlflow       — experiment tracking UI at http://localhost:5000
+#   kafka        — Confluent Kafka broker
+#   zookeeper    — ZooKeeper (required by Kafka)
+#
+# Quick start:
+#   docker compose up trainer          # train models once
+#   docker compose up inference        # start streaming inference
+#   docker compose up mlflow           # view experiment history
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Trainer — trains Optikal models and writes artefacts to the shared volume
+  # ---------------------------------------------------------------------------
+  trainer:
+    build:
+      context: .
+      target: trainer
+    volumes:
+      - model_store:/app/optikal_models
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Inference consumer — listens on ARGUS Kafka topics
+  # ---------------------------------------------------------------------------
+  inference:
+    build:
+      context: .
+      target: inference
+    volumes:
+      - model_store:/app/optikal_models:ro
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MODEL_DIR: /app/optikal_models
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # MLflow tracking server
+  # ---------------------------------------------------------------------------
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.9.0
+    ports:
+      - "5000:5000"
+    command: >
+      mlflow server
+        --host 0.0.0.0
+        --port 5000
+        --default-artifact-root /mlflow/artifacts
+        --backend-store-uri sqlite:////mlflow/mlflow.db
+    volumes:
+      - mlflow_data:/mlflow
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # ZooKeeper (required by Kafka)
+  # ---------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+
+  # ---------------------------------------------------------------------------
+  # Kafka broker
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+volumes:
+  model_store:
+  mlflow_data:
+  zookeeper_data:
+  zookeeper_logs:
+  kafka_data:

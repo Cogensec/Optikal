@@ -65,6 +65,12 @@ setup(
         "tuning": [
             "optuna>=3.3.0",
         ],
+        "gbm": [
+            "lightgbm>=4.0.0",
+        ],
+        "streaming": [
+            "confluent-kafka>=2.2.0",
+        ],
         "dev": [
             "pytest>=7.4.0",
             "pytest-cov>=4.1.0",
@@ -85,6 +91,8 @@ setup(
             "mlflow>=2.7.0",
             "optuna>=3.3.0",
             "pyyaml>=6.0.0",
+            "lightgbm>=4.0.0",
+            "confluent-kafka>=2.2.0",
             "pytest>=7.4.0",
             "pytest-cov>=4.1.0",
             "black>=23.7.0",
