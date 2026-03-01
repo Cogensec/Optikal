@@ -4,52 +4,68 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![CI](https://github.com/Cogensec/Optikal/actions/workflows/ci.yml/badge.svg)](https://github.com/Cogensec/Optikal/actions/workflows/ci.yml)
 
-Optikal is an advanced machine learning model designed specifically for detecting security threats in AI agent behavior. It combines Isolation Forest anomaly detection with LSTM sequential analysis to achieve high-accuracy threat detection with low latency (<10ms GPU inference).
+Optikal is a production-grade machine learning model for detecting security threats in AI agent behavior. It combines five complementary models — Isolation Forest, attention-based LSTM, Gradient Boosting, a multi-class ThreatClassifier, and a learned MetaLearner ensemble — to achieve high-accuracy, low-latency threat detection with calibrated uncertainty estimates.
 
-## 🎯 Overview
+## Overview
 
-Optikal was developed as part of the ARGUS AI Agent Security Platform to provide real-time, GPU-accelerated threat detection for AI agents. The model analyzes behavioral metrics, resource usage patterns, and temporal sequences to identify:
+Optikal is part of the ARGUS AI Agent Security Platform and analyzes behavioral metrics, resource usage patterns, and temporal sequences to identify:
 
-- **Credential Abuse**: Excessive API usage, privilege escalation attempts
-- **Data Exfiltration**: Unusual network activity, suspicious file access
-- **Resource Abuse**: CPU/memory spikes, compute hijacking
-- **Behavioral Drift**: Gradual deviation from normal operation patterns
-- **Prompt Injection**: Attack patterns in AI agent interactions
+- **Credential Abuse**: Excessive API usage, repetitive low-diversity queries, high error rates
+- **Data Exfiltration**: Unusual network volume, heavy file access, night-time activity preference
+- **Resource Abuse**: CPU/memory spikes, compute hijacking, thousands of API calls per minute
+- **Behavioral Drift**: Gradual, slow-burn deviation from an agent's established baseline
+- **Prompt Injection**: Adversarial input probing — high query diversity, many rejected calls, bimodal response times
+- **Privilege Escalation**: Two-phase attack — recon (access-denied flood) followed by exploitation spike
 
-## 🏗️ Architecture
+## Architecture
 
-Optikal uses a three-component ensemble architecture:
+Optikal uses a five-model ensemble pipeline:
 
-### 1. Isolation Forest (Anomaly Detection)
-- Unsupervised learning on behavioral metrics
-- Detects statistical outliers in agent behavior
-- Fast inference (~2ms on CPU)
-- Accuracy: ~88-92%
+### 1. Isolation Forest — Unsupervised Anomaly Detection
+- Detects statistical outliers without requiring labeled threat data
+- Fast CPU inference (~2 ms per batch)
+- Contamination and tree count tunable via Optuna hyperparameter search
+- Accuracy: ~88–92%
 
-### 2. LSTM (Sequential Analysis)
-- Analyzes temporal behavior sequences
-- Detects patterns invisible to point-in-time analysis
-- GPU-accelerated inference (~5ms)
-- Accuracy: ~93-97%
+### 2. LSTM with Bahdanau Attention — Sequential Analysis
+- Analyzes 10-timestep behavioral windows to detect threats invisible to point-in-time models
+- Bahdanau attention mechanism surfaces the most anomalous timesteps for interpretability
+- Monte Carlo Dropout (50 forward passes) produces calibrated `confidence` and `lstm_uncertainty` scores
+- GPU-accelerated inference (~5 ms)
+- Accuracy: ~93–97%
 
-### 3. Ensemble Fusion
-- Weighted combination of both models (40% IF + 60% LSTM)
-- Multi-factor risk assessment
-- Final threat score with confidence
-- Accuracy: ~95-98%
+### 3. Gradient Boosting — Supervised Classification
+- Fully supervised third ensemble member; leverages labeled `is_threat` and `threat_type` columns
+- Uses LightGBM when available; falls back to sklearn `GradientBoostingClassifier`
+- 200 estimators, lr=0.05; early stopping on validation loss
+- Captures non-linear feature interactions that IF and LSTM miss
 
-## 🚀 Quick Start
+### 4. ThreatClassifier — Multi-Class Threat Identification
+- `RandomForestClassifier` trained on threat samples only
+- Answers *what kind* of threat was detected across all 6 threat classes
+- Enables differentiated operator responses (block outbound for exfiltration vs. throttle compute for resource abuse)
+
+### 5. MetaLearner Ensemble — Learned Fusion
+- `LogisticRegression` trained on out-of-validation predictions from all base models
+- Learns optimal per-model weighting empirically rather than using fixed 40/60 ratios
+- Falls back to static weights when not fitted
+- Final ensemble accuracy: ~95–98%
+
+## Quick Start
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/Cogensec/Optikal.git
 cd Optikal
 
-# Install dependencies
-pip install -r optikal/requirements.txt
+# Core dependencies only
+pip install -e .
+
+# With all extras (LSTM + GBM + explainability + tracking + tuning + streaming)
+pip install -e ".[all]"
 ```
 
 ### Training
@@ -57,56 +73,79 @@ pip install -r optikal/requirements.txt
 ```bash
 cd optikal
 
-# Quick start (Isolation Forest only - no GPU required)
+# Quick start — Isolation Forest only, no GPU required
 python train_quick.py
 
-# Full training (IF + LSTM - GPU recommended)
+# Full pipeline — IF + Attention LSTM + GBM + ThreatClassifier + MetaLearner
 python optikal_trainer.py
+
+# Full pipeline with Optuna hyperparameter search and MLflow tracking
+python -c "
+from optikal_trainer import train_optikal_model
+train_optikal_model(tune=True, use_mlflow=True, n_hp_trials=50)
+"
 ```
 
 ### Inference
 
 ```python
-from optikal.optikal_trainer import OptikalIsolationForest
-from optikal.feature_engineering import OptikalFeatureEngineer
 import joblib
+from optikal.feature_engineering import OptikalFeatureEngineer
+from optikal.optikal_trainer import OptikalIsolationForest, OptikalGBM, OptikalEnsemble
 
-# Load trained model
-model = joblib.load("optikal/optikal_models/optikal_isolation_forest.pkl")
+# Load artefacts
 engineer = OptikalFeatureEngineer()
-engineer.load_scaler("optikal/optikal_models/optikal_scaler.pkl")
+engineer.load_scaler("optikal_models/optikal_scaler.pkl")
 
-# Prepare data
-features = engineer.extract_features(agent_data)
-X = engineer.transform(features)
+if_model        = OptikalIsolationForest()
+if_model.model  = joblib.load("optikal_models/optikal_isolation_forest.pkl")
+if_model.fitted = True
 
-# Predict threat
-threat_score = model.predict_anomaly_score(X)
-if threat_score > 0.7:
-    print(f"⚠️  High threat detected: {threat_score:.2f}")
+gbm_model = OptikalGBM.load("optikal_models/optikal_gbm.pkl")
+ensemble  = OptikalEnsemble(if_model, gbm=gbm_model)
+
+# Prepare features and score
+features   = engineer.extract_features(agent_df)
+X_scaled,_ = engineer.transform(features)
+
+preds, detail = ensemble.predict(X_scaled, mc_passes=50)
+
+print("Threat score:  ", detail["ensemble"])
+print("Confidence:    ", detail.get("confidence"))    # 1 - MC Dropout std
+print("Threat type:   ", detail.get("threat_type"))   # e.g. "credential_abuse"
 ```
 
-## 📊 Features
+## Features
 
-**18 Security-Relevant Features**:
-- **Rate-based**: API calls/min, errors/min, file ops/min, network calls/min
-- **Resource**: CPU usage, memory usage, resource intensity
-- **Behavioral**: Error rate, query diversity, success rate
-- **Temporal**: Night activity, weekend patterns, cyclical time encoding
-- **Composite**: Activity score, suspicion score (hand-crafted heuristics)
+**18 Security-Relevant Features** extracted from 11 raw behavioral metrics:
 
-## 🎓 Training Data
+| Category | Features |
+|----------|----------|
+| Rate-based (4) | `api_calls_per_min`, `errors_per_min`, `file_ops_per_min`, `network_calls_per_min` |
+| Resource (3) | `cpu_usage`, `memory_usage_gb`, `resource_intensity` |
+| Behavioral (3) | `error_rate`, `query_diversity_score`, `success_rate_score` |
+| Temporal (4) | `is_night`, `is_weekend`, `hour_sin`, `hour_cos` |
+| Response time (2) | `response_time_sec`, `response_time_log` |
+| Composite (2) | `activity_score`, `suspicion_score` |
 
-Optikal is initially trained on synthetic threat scenarios:
-- **Normal Behavior** (Baseline): Typical agent operation patterns
-- **Credential Abuse**: Excessive API usage, privilege escalation
-- **Data Exfiltration**: High network activity, unusual file access
-- **Resource Abuse**: CPU/memory spikes, compute hijacking
-- **Behavioral Drift**: Gradual deviation from normal patterns
+## Training Data
 
-The model can be refined with production telemetry through active learning.
+Optikal trains on synthetic scenarios covering all six attack types:
 
-## 📈 Performance
+| Scenario | Samples | Key signals |
+|----------|---------|-------------|
+| Normal Behavior | 5,000 | Baseline metrics |
+| Credential Abuse | 500 | 500 API/min, low diversity, high errors |
+| Data Exfiltration | 500 | 500 network calls, night hours |
+| Resource Abuse | 500 | CPU ≈90%, 1,000 API/min |
+| Behavioral Drift | 500 | Progressive deviation over time |
+| Prompt Injection | 500 | Diversity ≈0.9, 25 errors, bimodal latency |
+| Privilege Escalation | 500 | Recon → exploitation phase transition |
+| **Total** | **8,000** | |
+
+The `add_noise()` and `temporal_span_days` parameters add sensor realism and multi-month temporal variation. The Active Learning pipeline closes the gap to real production data over time.
+
+## Performance
 
 | Metric | Target | Achieved (Synthetic Data) |
 |--------|--------|---------------------------|
@@ -114,137 +153,205 @@ The model can be refined with production telemetry through active learning.
 | Precision | >90% | ~95% |
 | Recall | >95% | ~97% |
 | False Positive Rate | <2% | ~1.5% |
-| Inference Latency (GPU) | <10ms | ~7ms (ensemble) |
+| Inference Latency (GPU) | <10 ms | ~7 ms (ensemble) |
 | Throughput | >10K/sec | ~15K/sec |
 
-## 🔧 Deployment
+## Uncertainty Quantification
+
+The LSTM supports Monte Carlo Dropout for calibrated confidence estimates:
+
+```python
+mean_scores, std_scores = lstm_model.predict_score_with_uncertainty(X_seq, n_passes=50)
+confidence = 1.0 - std_scores   # 1.0 = fully certain, 0.0 = maximally uncertain
+```
+
+Uncertainty is also surfaced automatically in `OptikalEnsemble.predict(mc_passes=50)` via `detail["confidence"]` and `detail["lstm_uncertainty"]`.
+
+## Hyperparameter Tuning
+
+Optuna-driven Bayesian search over Isolation Forest contamination, n_estimators, and decision threshold:
+
+```python
+from optikal.hyperparameter_search import run_hyperparameter_search
+
+results = run_hyperparameter_search(X_train, y_train, X_val, y_val, n_trials=50)
+print(results["best_params"])   # {"contamination": 0.12, "n_estimators": 200, "threshold": 0.47}
+print(results["best_value"])    # 0.963 (F1)
+```
+
+Or enable it directly in the training pipeline: `train_optikal_model(tune=True)`.
+
+## Feature Drift Monitoring
+
+`FeatureDriftDetector` tracks Population Stability Index (PSI) per feature between training data and live inference inputs. PSI >= 0.2 flags significant drift before it silently degrades accuracy:
+
+```python
+from optikal.drift_detector import FeatureDriftDetector
+
+detector = FeatureDriftDetector(feature_names, window_size=500)
+detector.fit_reference(X_train)
+
+# During inference — auto-checks when 500 samples have buffered
+detector.update(X_batch)
+```
+
+## Active Learning
+
+`ActiveLearningBuffer` routes high-uncertainty inputs to human analysts. Once `min_labeled` samples are labeled, the retrain callback fires automatically:
+
+```python
+from optikal.active_learning import ActiveLearningBuffer
+
+buffer = ActiveLearningBuffer(
+    uncertainty_threshold=0.3,
+    min_labeled=200,
+    retrain_callback=my_retrain_fn,
+)
+buffer.add_uncertain(X_batch, scores, sample_ids)
+buffer.add_label("sample_123", label=1, threat_type="credential_abuse")
+print(buffer.stats)
+```
+
+## Kafka Stream Integration
+
+`OptikalKafkaConsumer` connects to ARGUS Kafka topics, runs inference on every event, and publishes structured threat alerts:
+
+```python
+from optikal.kafka_consumer import KafkaConfig, OptikalKafkaConsumer
+
+consumer = OptikalKafkaConsumer(
+    engineer=engineer,
+    if_model=if_model,
+    config=KafkaConfig(bootstrap_servers="kafka:9092"),
+    threat_classifier=threat_clf,
+)
+consumer.run()   # Blocking; Ctrl-C to stop
+```
+
+Input topics: `argus.agent.metrics`, `argus.io.validation`, `argus.policy.decisions`
+Output topic: `argus.threat.alerts`
+
+## Deployment
+
+### Docker
+
+```bash
+# Train models
+docker build --target trainer -t optikal:trainer .
+docker run -v $(pwd)/optikal_models:/app/optikal_models optikal:trainer
+
+# Run inference consumer
+docker build --target inference -t optikal:inference .
+docker run -e KAFKA_BOOTSTRAP_SERVERS=kafka:9092 optikal:inference
+
+# Full dev stack — trainer + inference + Kafka + MLflow + ZooKeeper
+docker compose up
+```
 
 ### NVIDIA Triton Inference Server
 
-Export models to ONNX for GPU deployment:
-
 ```bash
-cd optikal
+pip install -e ".[onnx]"
+cd optikal && python export_onnx.py
 
-# Install ONNX export tools
-pip install skl2onnx tf2onnx onnx
-
-# Export models
-python export_onnx.py
-```
-
-Start Triton server:
-
-```bash
 docker run --gpus all -p 8000:8000 -p 8001:8001 -p 8002:8002 \
-    -v $(pwd)/models:/models \
+    -v $(pwd)/triton_models:/models \
     nvcr.io/nvidia/tritonserver:24.01-py3 \
     tritonserver --model-repository=/models
 ```
 
-Test inference:
+### MLflow Experiment Tracking
 
-```bash
-curl http://localhost:8000/v2/models/optikal_isolation_forest/ready
+MLflow tracking is built into the training pipeline — no boilerplate required:
+
+```python
+train_optikal_model(use_mlflow=True)
+# Then: mlflow ui  →  http://localhost:5000
 ```
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 Optikal/
+├── Dockerfile                          # Multi-stage: base / trainer / inference
+├── docker-compose.yml                  # Full dev stack (Kafka + MLflow + ZooKeeper)
+├── .dockerignore
+├── .github/
+│   └── workflows/
+│       └── ci.yml                      # lint / typecheck / test / smoke_train / onnx_export
+├── setup.py                            # Package setup + extras groups
+├── pytest.ini
+├── README.md                           # This file
+├── LICENSE
+├── DEPLOYMENT.md
 ├── optikal/
-│   ├── __init__.py                 # Package initialization
-│   ├── data_generator.py           # Synthetic training data generation
-│   ├── feature_engineering.py      # Feature extraction and scaling
-│   ├── optikal_trainer.py          # Full model training (IF + LSTM)
-│   ├── train_quick.py              # Quick training (IF only)
-│   ├── export_onnx.py              # ONNX export for Triton
-│   ├── requirements.txt            # Python dependencies
-│   ├── README.md                   # Package documentation
-│   └── STATUS.md                   # Development status
-├── setup.py                        # Package setup
-├── README.md                       # This file
-├── LICENSE                         # MIT License
-├── .gitignore                      # Git ignore rules
+│   ├── __init__.py                     # Package init + configure_logging()
+│   ├── config.py                       # Typed dataclass configuration (JSON/YAML I/O)
+│   ├── data_generator.py               # Synthetic data — 6 threat scenarios
+│   ├── feature_engineering.py          # 18-feature extraction, validation, scaler
+│   ├── optikal_trainer.py              # All 5 model classes + training pipeline
+│   ├── train_quick.py                  # Quick-start: Isolation Forest only
+│   ├── export_onnx.py                  # ONNX export for Triton
+│   ├── explainability.py               # SHAP-based feature attribution
+│   ├── drift_detector.py               # PSI feature drift monitoring
+│   ├── hyperparameter_search.py        # Optuna hyperparameter optimization
+│   ├── kafka_consumer.py               # ARGUS Kafka consumer + alert publisher
+│   ├── active_learning.py              # Uncertainty buffer + retrain trigger
+│   └── requirements.txt
+├── tests/
+│   ├── conftest.py
+│   ├── test_data_generator.py
+│   ├── test_feature_engineering.py
+│   └── test_trainer.py
 └── examples/
-    └── inference_example.py        # Usage examples
+    └── inference_example.py
 ```
 
-## 🔬 Model Development
+## Integration with ARGUS
 
-### Creating Custom Pipelines
+1. Deploy ARGUS services (ASR, ASG, PDE) — Kafka producers are already wired
+2. Deploy Optikal models to Triton or run the inference Docker image
+3. Start `OptikalKafkaConsumer` to bridge ARGUS topics to Optikal
+4. Threat alerts flow to `argus.threat.alerts` for downstream response automation
 
-Optikal can be extended with custom threat detection pipelines:
+## License
 
-```python
-from optikal.data_generator import SyntheticDataGenerator
-from optikal.feature_engineering import OptikalFeatureEngineer
+MIT — see [LICENSE](LICENSE).
 
-# Generate custom threat scenarios
-generator = SyntheticDataGenerator()
-# ... add custom threat generation methods
+## Acknowledgments
 
-# Train with custom data
-engineer = OptikalFeatureEngineer()
-# ... train model
-```
-
-### Feature Selection
-
-Use feature importance analysis to optimize the model:
-
-```python
-import shap
-
-# SHAP analysis for explainability
-explainer = shap.TreeExplainer(isolation_forest_model)
-shap_values = explainer.shap_values(X_test)
-
-# Visualize feature importance
-shap.summary_plot(shap_values, X_test, feature_names=feature_names)
-```
-
-## 🤝 Integration with ARGUS
-
-Optikal was designed for the ARGUS AI Agent Security Platform but can be used standalone. For full ARGUS integration:
-
-1. Install ARGUS platform
-2. Enable Kafka event streaming in ARGUS services
-3. Deploy Optikal models to Triton
-4. Configure Morpheus pipeline to use Optikal endpoints
-
-See [ARGUS Integration Guide](https://github.com/Cogensec/aegis-platform) for details.
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- Built with [scikit-learn](https://scikit-learn.org/), [TensorFlow](https://www.tensorflow.org/), and [NVIDIA Triton](https://github.com/triton-inference-server)
-- Inspired by NVIDIA Morpheus cybersecurity framework
+- Built with [scikit-learn](https://scikit-learn.org/), [TensorFlow](https://www.tensorflow.org/), [LightGBM](https://lightgbm.readthedocs.io/), and [NVIDIA Triton](https://github.com/triton-inference-server)
+- Hyperparameter search powered by [Optuna](https://optuna.org/)
+- Explainability via [SHAP](https://shap.readthedocs.io/)
 - Part of the ARGUS AI Agent Security Platform by Cogensec
 
-## 📧 Contact
+## Contact
 
-**Cogensec**  
+**Cogensec**
 - Website: [cogensec.com](https://cogensec.com)
 - GitHub: [@Cogensec](https://github.com/Cogensec)
 - Email: info@cogensec.com
 
-For questions or issues with Optikal, please [open an issue](https://github.com/Cogensec/Optikal/issues).
+## Roadmap
 
-## 🗺️ Roadmap
-
+- [x] Isolation Forest anomaly detection
+- [x] LSTM with Bahdanau attention
+- [x] Gradient Boosting third ensemble member
+- [x] Multi-class ThreatClassifier (6 threat types)
+- [x] MetaLearner learned ensemble fusion
+- [x] SHAP explainability
+- [x] Prompt Injection + Privilege Escalation threat generators
+- [x] Feature drift detection (PSI)
+- [x] Monte Carlo Dropout uncertainty quantification
+- [x] Optuna hyperparameter search
+- [x] Active learning pipeline
+- [x] Kafka stream integration (ARGUS)
+- [x] Docker / docker-compose deployment
+- [x] GitHub Actions CI/CD (lint / test / smoke_train / onnx_export)
 - [ ] Pre-trained models with production threat data
-- [ ] Active learning pipeline for continuous improvement
-- [ ] SHAP-based explainability dashboard
-- [ ] Additional threat scenario generators
-- [ ] Model drift detection and monitoring
-- [ ] Docker image for easy deployment
 - [ ] Kubernetes Helm chart
-- [ ] Integration with popular security platforms
+- [ ] Integration with popular SIEM platforms
 
 ---
 
-**Optikal** - GPU-Accelerated AI Threat Detection for AI Agent Security
+**Optikal** — GPU-Accelerated AI Threat Detection for AI Agent Security

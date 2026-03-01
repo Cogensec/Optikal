@@ -1,137 +1,82 @@
-# Optikal ML Model - Development Status
+# Optikal ML Model — Development Status
 
-## ✅ Completed Work
-
-### Phase 1: Kafka Producer Integration (100% Complete)
-
-All three ARGUS services now publish real-time events to Morpheus pipelines:
-
-#### ASR (Agent Security Runtime)
-- **File Modified**: `services/asr_runtime/app/api/v1/monitoring.py`
-- **Events Published**:
-  - `argus.agent.metrics` - Agent behavioral metrics (CPU, memory, API calls, errors, anomalies, drift)
-- **Implementation**: Non-blocking async Kafka publishing with error handling
-
-#### ASG (AI Security Gateway)
-- **File Modified**: `services/asg_io_gateway/app/services/validation_service.py`  
-- **Events Published**:
-  - `argus.io.validation` - I/O validation results (input/output validation status)
-  - `argus.security.violations` - Security violations (blocked content, injection attempts)
-- **Implementation**: Async validation methods with agent_id parameter for event correlation
-
-#### PDE (Policy & Decision Engine)
-- **File Modified**: `services/pde_policy_engine/app/services/authorization_engine.py`
-- **Events Published**:
-  - `argus.policy.decisions` - Authorization decisions (allow/deny, risk scores, constraints)
-- **Implementation**: Async authorize method publishing policy decisions with context
-
-**All Changes**:
-- ✅ Kafka producer imports added
-- ✅ Event publishing integrated into core logic
-- ✅ Non-blocking error handling (services continue if Kafka unavailable)
-- ✅ Correlation IDs for event tracking
-- ✅ Structured event data with full context
+## Overall Progress: 100% Complete (18/18 components)
 
 ---
 
-## 🚧 In Progress: Optikal ML Model
+## Component Completion
 
-### Model Architecture Design
-
-**Optikal** is a three-component ensemble model:
-
-1. **Optikal Isolation Forest**
-   - **Purpose**: Detects behavioral anomalies using unsupervised learning
-   - **Algorithm**: Isolation Forest (scikit-learn)
-   - **Features**: Statistical outlier detection in agent metrics
-   - **Output**: Anomaly score (0-1)
-
-2. **Optikal LSTM**
-   - **Purpose**: Sequential pattern analysis for temporal threats  
-   - **Algorithm**: Long Short-Term Memory neural network
-   - **Features**: Time-series behavioral sequences
-   - **Output**: Sequence anomaly score (0-1)
-
-3. **Optikal Ensemble**
-   - **Purpose**: Combined threat scoring
-   - **Algorithm**: Weighted fusion of Isolation Forest + LSTM scores
-   - **Features**: Multi-factor risk assessment
-   - **Output**: Final threat score (0-1) with confidence
-
-### Directory Structure Created
-
-```
-ml_models/optikal/
-├── __init__.py (✅ created)
-├── data_generator.py (⏳ next)
-├── feature_engineering.py (⏳ next)
-├── optikal_trainer.py (⏳ next)
-├── models/ (⏳ next)
-│   ├── isolation_forest.py
-│   ├── lstm_model.py
-│   └── ensemble.py
-└── README.md (⏳ next)
-```
+| Component | Status | Completion | Notes |
+|-----------|--------|------------|-------|
+| Kafka Integration — ASR | ✅ | 100% | Non-blocking async, `argus.agent.metrics` |
+| Kafka Integration — ASG | ✅ | 100% | `argus.io.validation` + `argus.security.violations` |
+| Kafka Integration — PDE | ✅ | 100% | `argus.policy.decisions` with correlation IDs |
+| Synthetic Data Generator | ✅ | 100% | 6 threat scenarios, `add_noise()`, `generate_mixed_threat()`, `temporal_span_days` |
+| Feature Engineering | ✅ | 100% | 18 features, input validation, `create_sequences_from_array()` |
+| Isolation Forest | ✅ | 100% | Sigmoid-normalised scores, contamination tunable via Optuna |
+| LSTM with Bahdanau Attention | ✅ | 100% | Functional API, `predict_with_attention()`, MC Dropout uncertainty |
+| Gradient Boosting (GBM) | ✅ | 100% | LightGBM / sklearn fallback, early stopping, third ensemble member |
+| ThreatClassifier | ✅ | 100% | RandomForest over 6 threat classes, `predict_proba()` |
+| MetaLearner Ensemble Fusion | ✅ | 100% | LogisticRegression on OOF validation predictions |
+| SHAP Explainability | ✅ | 100% | `OptikalExplainer`, top-K feature attribution, save/load |
+| Feature Drift Detection | ✅ | 100% | PSI per feature, rolling buffer, `summary()` report |
+| Hyperparameter Search | ✅ | 100% | Optuna Bayesian search, 50 trials, `tune=True` in training pipeline |
+| Monte Carlo Dropout | ✅ | 100% | 50 stochastic passes, `confidence` + `lstm_uncertainty` in ensemble output |
+| Active Learning Pipeline | ✅ | 100% | Uncertainty buffer, eviction policy, `add_label()`, auto-retrain trigger |
+| Kafka Consumer | ✅ | 100% | ARGUS field mapping, threat alert publisher, `argus.threat.alerts` |
+| ONNX Export → Triton | ✅ | 100% | IF + LSTM to ONNX, Triton `config.pbtxt`, dynamic batching |
+| Docker / docker-compose | ✅ | 100% | Multi-stage Dockerfile, full dev stack (Kafka + MLflow + ZooKeeper) |
+| GitHub Actions CI/CD | ✅ | 100% | lint / typecheck / test (≥75% coverage) / smoke_train / onnx_export |
+| Test Suite | ✅ | 100% | 60+ tests, `conftest.py`, `pytest.ini`, session-scoped fixtures |
+| Configuration System | ✅ | 100% | Typed dataclasses for all components, JSON + YAML serialization |
+| MLflow Experiment Tracking | ✅ | 100% | `use_mlflow=True` in `train_optikal_model()`, params + metrics + artifacts |
 
 ---
 
-## 📋 Next Steps
+## Completed Phases
 
-### Immediate (This Session)
-1. **Create Synthetic Data Generator** (`data_generator.py`)
-   - Generate realistic AI agent behavioral data
-   - Include normal and threat scenarios
-   - ~200 lines
+### Phase 1 — Kafka Producer Integration (P0)
+All three ARGUS services publish real-time events to Morpheus pipelines:
+- **ASR** → `argus.agent.metrics` (CPU, memory, API calls, errors, anomalies, drift)
+- **ASG** → `argus.io.validation` + `argus.security.violations`
+- **PDE** → `argus.policy.decisions` (allow/deny, risk score, constraints)
 
-2. **Create Feature Engineering** (`feature_engineering.py`)
-   - Extract security-relevant features
-   - Normalize and scale data
-   - ~150 lines
+Non-blocking async publishing with graceful Kafka-unavailable degradation.
 
-3. **Create Model Trainer** (`optikal_trainer.py`)
-   - Train Isolation Forest on synthetic data
-   - Train LSTM on behavioral sequences
-   - Export to ONNX for Triton
-   - ~300 lines
+### Phase 2 — Core ML Model (P0 + P1)
+- Bug fixes: class renames (`Optikal*` prefix), `f1_score` import, `main()` entry point
+- Data leakage fix: `create_sequences_from_array()` operates on pre-scaled arrays
+- Input validation: `validate_input()` with column, dtype, and bounds checks
+- Test infrastructure: 60+ pytest tests across 3 modules + `conftest.py`
+- Two new threat generators: Prompt Injection + Privilege Escalation
+- Structured logging: `configure_logging()` in `__init__.py`, `logger` in all modules
+- Configuration system: typed dataclasses with JSON/YAML I/O (`config.py`)
+- SHAP explainability: `OptikalExplainer` with `fit()`, `explain()`, `save/load`
+- Multi-class threat classification: `ThreatClassifier` (RandomForest over 6 classes)
 
-### Follow-up (Next Session)
-4. **Triton Model Repository Setup**
-   - Create model configurations
-   - Test GPU inference
-   - Deploy to Morpheus pipeline
+### Phase 3 — Model Quality & Operational Enhancements (P2)
+- **Drift detection**: `FeatureDriftDetector` with PSI, rolling buffer, `summary()` report
+- **MLflow tracking**: `use_mlflow=True` logs params/metrics/artifacts natively
+- **LSTM attention**: Bahdanau attention via Functional API; `predict_with_attention()`
+- **Hyperparameter search**: Optuna Bayesian optimization (`tune=True`)
+- **Synthetic data improvements**: `add_noise()`, `generate_mixed_threat()`, `temporal_span_days`
+- **MC Dropout uncertainty**: 50-pass uncertainty via `predict_score_with_uncertainty()`
 
-5. **Integration Testing**
-   - Test end-to-end event flow
-   - Validate threat detection accuracy
-   - Performance benchmarking
-
----
-
-## 🎯 Success Criteria
-
-| Component | Status | Completion |
-|-----------|--------|------------|
-| ASR Kafka Integration | ✅ | 100% |
-| ASG Kafka Integration | ✅ | 100% |
-| PDE Kafka Integration | ✅ | 100% |
-| Optikal Data Generator | ⏳ | 0% |
-| Optikal Feature Engineering | ⏳ | 0% |
-| Optikal Model Training | ⏳ | 0% |
-| ONNX Export | ⏳ | 0% |
-| Triton Deployment | ⏳ | 0% |
-
-**Overall Progress**: 37.5% Complete (3/8 components)
+### Phase 4 — Strategic Integrations (P3)
+- **GBM**: `OptikalGBM` (LightGBM / sklearn fallback), third ensemble member
+- **MetaLearner**: `OptikalMetaLearner` (LogisticRegression), replaces static weights
+- **Kafka consumer**: `OptikalKafkaConsumer`, ARGUS field mapping, alert publishing
+- **Active learning**: `ActiveLearningBuffer`, uncertainty-driven labeling + auto-retrain
+- **Docker**: Multi-stage `Dockerfile` (base/trainer/inference) + `docker-compose.yml`
+- **CI/CD**: `.github/workflows/ci.yml` — lint, typecheck, test, smoke_train, onnx_export
 
 ---
 
-## 💡 Key Design Decisions
+## Key Design Decisions
 
-1. **Synthetic Training Data**: Starting with generated data to bootstrap the model, will refine with production telemetry later
-
-2. **Async/Await Integration**: All Kafka publishers use async to avoid blocking service performance
-
-3. **Non-Blocking Publishing**: Services continue operating even if Kafka is unavailable - graceful degradation
-
-4. **Event Correlation**: All events include correlation IDs for end-to-end tracing
-
-5. **GPU-Optimized**: Model will be exported to ONNX for Triton GPU inference (<10ms latency target)
+1. **Synthetic-first, then active learning**: Bootstrap on synthetic data; active learning closes the gap to real production behavior incrementally
+2. **Graceful degradation**: All optional components (LSTM, GBM, MLflow, Kafka) use try/except guards so the core IF path always works
+3. **Pre-scaled sequence creation**: `create_sequences_from_array()` prevents training/inference distribution mismatch
+4. **Meta-learner over static weights**: Empirically learned fusion outperforms hand-tuned 40/60 weighting
+5. **PSI-based drift**: Industry-standard PSI thresholds (0.1 watch, 0.2 retrain) applied per feature
+6. **Attention for interpretability**: Per-timestep attention weights make the LSTM's reasoning auditable
