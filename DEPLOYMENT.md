@@ -8,102 +8,158 @@
 cd optikal-repo
 git init
 git add .
-git commit -m "Initial commit: Optikal v1.0.0"
+git commit -m "Initial commit: Optikal v2.0.0"
 ```
 
 ### 2. Connect to GitHub
 
 ```bash
-# Add remote repository
 git remote add origin https://github.com/Cogensec/Optikal.git
-
-# Push to GitHub
 git branch -M main
 git push -u origin main
 ```
 
-### 3. Create Release (Optional)
+### 3. Create Release
 
 ```bash
-git tag -a v1.0.0 -m "Optikal v1.0.0 - Initial Release"
-git push origin v1.0.0
+git tag -a v2.0.0 -m "Optikal v2.0.0 — full five-model ensemble"
+git push origin v2.0.0
 ```
 
 ## Installation from GitHub
 
-Once pushed, users can install directly from GitHub:
-
 ```bash
-# Install latest from main
+# Core install
 pip install git+https://github.com/Cogensec/Optikal.git
 
-# Install specific version
-pip install git+https://github.com/Cogensec/Optikal.git@v1.0.0
+# With specific extras
+pip install "optikal[lstm,gbm,explain,tracking,streaming] @ git+https://github.com/Cogensec/Optikal.git"
 
-# Install with extras
+# Everything
 pip install "optikal[all] @ git+https://github.com/Cogensec/Optikal.git"
-```
-
-## PyPI Distribution (Future)
-
-To distribute via PyPI:
-
-```bash
-# Build package
-python setup.py sdist bdist_wheel
-
-# Upload to PyPI
-pip install twine
-twine upload dist/*
-```
-
-Then users caninstall via:
-
-```bash
-pip install optikal
 ```
 
 ## Docker Deployment
 
-Create `Dockerfile`:
+The repository ships a real multi-stage `Dockerfile` with three targets:
 
-```dockerfile
-FROM python:3.11-slim
+| Stage | Purpose | Key extras installed |
+|-------|---------|----------------------|
+| `base` | Shared Python + system deps | `numpy`, `pandas`, `scikit-learn`, `joblib` |
+| `trainer` | Full training environment | `tensorflow`, `shap`, `mlflow`, `optuna` |
+| `inference` | Lean Kafka consumer image | `confluent-kafka`, `shap` |
 
-WORKDIR /app
-
-# Install dependencies
-COPY optikal/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application
-COPY optikal/ ./optikal/
-COPY setup.py .
-
-# Install package
-RUN pip install -e .
-
-CMD ["python", "-m", "optikal.train_quick"]
-```
-
-Build and run:
+### Building
 
 ```bash
-docker build -t cogensec/optikal:1.0.0 .
-docker run cogensec/optikal:1.0.0
+# Trainer image
+docker build --target trainer -t cogensec/optikal:trainer .
+
+# Inference / Kafka consumer image
+docker build --target inference -t cogensec/optikal:inference .
 ```
+
+### Running
+
+```bash
+# Train and write models to a named volume
+docker run \
+    -v optikal_models:/app/optikal_models \
+    -e MLFLOW_TRACKING_URI=http://mlflow:5000 \
+    cogensec/optikal:trainer
+
+# Start the Kafka inference consumer
+docker run \
+    -v optikal_models:/app/optikal_models:ro \
+    -e KAFKA_BOOTSTRAP_SERVERS=kafka:9092 \
+    cogensec/optikal:inference
+```
+
+### Full Dev Stack (docker-compose)
+
+`docker-compose.yml` at the repo root brings up the complete development environment:
+
+```
+Services:
+  trainer      — trains Optikal models, writes to shared model_store volume
+  inference    — Kafka consumer running live inference
+  mlflow       — experiment tracking UI at http://localhost:5000
+  kafka        — Confluent Kafka 7.5.0
+  zookeeper    — ZooKeeper (required by Kafka)
+```
+
+```bash
+# Start everything
+docker compose up
+
+# Train only
+docker compose up trainer
+
+# Start inference consumer (after models are trained)
+docker compose up inference
+
+# View MLflow experiments
+docker compose up mlflow
+# Then open http://localhost:5000
+```
+
+## NVIDIA Triton Inference Server
+
+Export models to ONNX for GPU deployment:
+
+```bash
+pip install -e ".[onnx]"
+cd optikal && python export_onnx.py
+```
+
+Triton model repository structure created by `export_onnx.py`:
+
+```
+triton_models/
+├── optikal_isolation_forest/
+│   ├── 1/model.onnx
+│   └── config.pbtxt          # max_batch_size=1000, KIND_GPU
+└── optikal_lstm/
+    ├── 1/model.onnx
+    └── config.pbtxt          # dynamic_batching: [100, 500, 1000]
+```
+
+Start Triton:
+
+```bash
+docker run --gpus all \
+    -p 8000:8000 -p 8001:8001 -p 8002:8002 \
+    -v $(pwd)/triton_models:/models \
+    nvcr.io/nvidia/tritonserver:24.01-py3 \
+    tritonserver --model-repository=/models
+```
+
+Test readiness:
+
+```bash
+curl http://localhost:8000/v2/models/optikal_isolation_forest/ready
+```
+
+## PyPI Distribution
+
+```bash
+python setup.py sdist bdist_wheel
+pip install twine
+twine upload dist/*
+```
+
+Then: `pip install optikal`
 
 ## Kubernetes Deployment
 
-Create `k8s/optikal-deployment.yaml`:
-
 ```yaml
+# k8s/optikal-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: optikal-training
+  name: optikal-inference
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: optikal
@@ -114,75 +170,85 @@ spec:
     spec:
       containers:
       - name: optikal
-        image: cogensec/optikal:1.0.0
-        resources:
-          limits:
-            nvidia.com/gpu: 1
+        image: cogensec/optikal:inference
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka-service:9092"
+        - name: MODEL_DIR
+          value: "/models"
+        volumeMounts:
+        - name: model-store
+          mountPath: /models
+          readOnly: true
+      volumes:
+      - name: model-store
+        persistentVolumeClaim:
+          claimName: optikal-models-pvc
 ```
-
-Deploy:
 
 ```bash
 kubectl apply -f k8s/optikal-deployment.yaml
 ```
 
-## CI/CD with GitHub Actions
+## CI/CD — GitHub Actions
 
-Create `.github/workflows/test.yml`:
+`.github/workflows/ci.yml` ships with the repository and runs automatically on every push and pull request. It defines five jobs:
 
-```yaml
-name: Test
+| Job | Trigger | What it does |
+|-----|---------|--------------|
+| `lint` | Every push/PR | `black --check` + `flake8` (max 100 chars) |
+| `typecheck` | Every push/PR | `mypy` with `--ignore-missing-imports` |
+| `test` | Every push/PR | `pytest tests/ --cov=optikal --cov-fail-under=75` across Python 3.9/3.10/3.11 |
+| `smoke_train` | Every push/PR (after test) | Mini dataset (300 normal + 50×6 threats) end-to-end training run |
+| `onnx_export` | Tagged releases only | Exports IF + LSTM to ONNX, uploads as release artifact |
 
-on: [push, pull_request]
+No additional configuration is needed — the workflow file is already in place.
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - run: pip install -e .[dev]
-      - run: pytest tests/
-```
+## MLflow Experiment Tracking
 
-## Model Versioning
-
-Use Git LFS for large model files:
-
-```bash
-# Install Git LFS
-git lfs install
-
-# Track model files
-git lfs track "*.pkl"
-git lfs track "*.h5"
-git lfs track "*.onnx"
-
-# Add .gitattributes
-git add .gitattributes
-git commit -m "Add Git LFS tracking"
-```
-
-## Monitoring in Production
-
-Use MLflow for experiment tracking:
+MLflow tracking is integrated directly into the training pipeline:
 
 ```python
-import mlflow
+from optikal.optikal_trainer import train_optikal_model
 
-mlflow.start_run()
-mlflow.log_params({"contamination": 0.3, "n_estimators": 100})
-mlflow.log_metrics({"accuracy": 0.96, "f1_score": 0.95})
-mlflow.sklearn.log_model(model, "model")
-mlflow.end_run()
+train_optikal_model(
+    data_path="optikal_training_data.csv",
+    output_dir="optikal_models",
+    use_mlflow=True,       # enables tracking
+    tune=True,             # also logs Optuna best params
+    n_hp_trials=50,
+)
+```
+
+What gets logged automatically:
+- **Params**: `n_features`, `training_samples`, `contamination`, `n_estimators`, Optuna best params
+- **Metrics**: `if_f1`, `if_roc_auc`, `lstm_f1`, `lstm_roc_auc`, `gbm_f1`, `gbm_roc_auc`, `ensemble_f1`, `ensemble_roc_auc`
+- **Artifacts**: `isolation_forest` and `gbm` sklearn models
+
+Start the UI:
+
+```bash
+mlflow ui     # http://localhost:5000
+```
+
+Or use the MLflow service in `docker-compose.yml` which starts at `http://localhost:5000` automatically.
+
+## Model Versioning with Git LFS
+
+For large model files:
+
+```bash
+git lfs install
+git lfs track "*.pkl" "*.h5" "*.onnx"
+git add .gitattributes
+git commit -m "Add Git LFS tracking for model files"
 ```
 
 ## Security Best Practices
 
-1. **API Keys**: Never commit API keys - use environment variables
-2. **Model Signing**: Sign models before deployment
-3. **RBAC**: Implement role-based access control
-4. **Audit Logs**: Log all model predictions
-5. **Rate Limiting**: Prevent abuse of inference endpoints
+1. Never commit API keys or credentials — use environment variables or secrets managers
+2. Sign model artefacts before deployment (`sha256sum` + store hash in metadata)
+3. Restrict Triton endpoints with a reverse proxy / API gateway
+4. Audit all inference predictions via structured logging (`configure_logging(format="json")`)
+5. Rate-limit the Kafka consumer topic to prevent alert flooding
+6. Rotate model artefacts on drift detection (PSI >= 0.2 on any feature)
