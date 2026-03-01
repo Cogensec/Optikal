@@ -368,6 +368,67 @@ class SyntheticDataGenerator:
         return pd.DataFrame(data)
 
     # ------------------------------------------------------------------
+    # Dataset utilities (P2-5)
+    # ------------------------------------------------------------------
+
+    def add_noise(self, df: pd.DataFrame, noise_level: float = 0.05) -> pd.DataFrame:
+        """
+        Add multiplicative Gaussian noise to all numeric metric columns to
+        simulate sensor measurement error (+/- ``noise_level`` fraction).
+
+        Args:
+            df:          DataFrame of generated samples
+            noise_level: Fractional noise magnitude (default 0.05 = ±5%)
+
+        Returns:
+            DataFrame with perturbed values (bounds preserved per column).
+        """
+        numeric_cols = [
+            "cpu_usage_percent", "memory_usage_mb", "network_calls_count",
+            "file_operations_count", "api_calls_count", "error_count",
+            "response_time_ms",
+        ]
+        noisy = df.copy()
+        for col in numeric_cols:
+            if col in noisy.columns:
+                noise = np.random.normal(1.0, noise_level, size=len(noisy))
+                noisy[col] = (noisy[col] * noise).clip(lower=0)
+
+        # Re-apply cpu ceiling
+        if "cpu_usage_percent" in noisy.columns:
+            noisy["cpu_usage_percent"] = noisy["cpu_usage_percent"].clip(upper=100)
+
+        return noisy
+
+    def generate_mixed_threat(self, n_samples: int = 100) -> pd.DataFrame:
+        """
+        Generate a session that starts normal then transitions mid-session
+        into a real threat (data exfiltration).
+
+        This captures the realistic pattern of an agent that behaves normally
+        before executing its malicious payload.
+
+        Args:
+            n_samples: Total number of samples in the session
+
+        Returns:
+            DataFrame where the first half is labelled normal and the second
+            half is labelled data_exfiltration.
+        """
+        half = n_samples // 2
+        normal_part = self.generate_normal_behavior(half)
+        threat_part = self.generate_data_exfiltration(n_samples - half)
+
+        mixed = pd.concat([normal_part, threat_part], ignore_index=True)
+
+        # Rebuild consecutive timestamps across both halves
+        base = datetime.now() - timedelta(hours=n_samples)
+        mixed["timestamp"] = [
+            (base + timedelta(hours=i)).isoformat() for i in range(len(mixed))
+        ]
+        return mixed
+
+    # ------------------------------------------------------------------
     # Dataset assembly
     # ------------------------------------------------------------------
 
@@ -375,6 +436,8 @@ class SyntheticDataGenerator:
         self,
         n_normal: int = 5000,
         n_threats_per_type: int = 500,
+        temporal_span_days: int = 1,
+        add_noise_level: float = 0.0,
     ) -> pd.DataFrame:
         """
         Generate a complete training dataset with all six threat scenarios.
@@ -382,6 +445,10 @@ class SyntheticDataGenerator:
         Args:
             n_normal:            Number of normal behaviour samples
             n_threats_per_type:  Number of samples per threat type
+            temporal_span_days:  Spread timestamps over this many days (default 1).
+                                 Use 90 for realistic multi-month variation.
+            add_noise_level:     If > 0, apply sensor noise at this level (e.g. 0.05).
+                                 Set to 0.0 (default) for clean synthetic data.
 
         Returns:
             Shuffled combined DataFrame
@@ -414,6 +481,25 @@ class SyntheticDataGenerator:
              drift_df, injection_df, escalation_df],
             ignore_index=True,
         )
+
+        # Spread timestamps across temporal_span_days if requested
+        if temporal_span_days > 1:
+            n = len(full_dataset)
+            span_hours = temporal_span_days * 24
+            base = datetime.now() - timedelta(hours=span_hours)
+            timestamps = [
+                (base + timedelta(hours=span_hours * i / max(n - 1, 1))).isoformat()
+                for i in range(n)
+            ]
+            full_dataset["timestamp"] = timestamps
+            logger.info(
+                "Timestamps spread over %d days (%d samples)", temporal_span_days, n
+            )
+
+        # Apply measurement noise if requested
+        if add_noise_level > 0.0:
+            full_dataset = self.add_noise(full_dataset, noise_level=add_noise_level)
+            logger.info("Applied %.0f%% sensor noise", add_noise_level * 100)
 
         # Shuffle
         full_dataset = full_dataset.sample(frac=1, random_state=self.seed).reset_index(drop=True)

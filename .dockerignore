@@ -1,0 +1,59 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Model artefacts (bind-mounted at runtime)
+optikal_models/
+models/
+*.pkl
+*.h5
+*.onnx
+*.pb
+
+# Data files
+*.csv
+
+# Test / coverage artefacts
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE / OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Git
+.git/
+.gitignore
+
+# CI / docs
+.github/
+docs/
+
+# Docker compose override files
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Log files
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Triton model repository
+triton_models/
